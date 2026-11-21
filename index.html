@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>中央極限定理 (CLT) 互動模擬器</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Microsoft JhengHei", "PingFang TC", sans-serif; }
+    body { margin: 0; padding: 16px; background: #f8fafc; color: #1e293b; }
+    .container { max-width: 900px; margin: 0 auto; background: #ffffff; border-radius: 12px; padding: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.06); }
+    h2 { margin: 0 0 12px 0; font-size: 1.25rem; color: #0f172a; }
+    .controls { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; background: #f1f5f9; padding: 12px 16px; border-radius: 8px; margin-bottom: 18px; }
+    .control-group { display: flex; align-items: center; gap: 8px; font-size: 0.95rem; }
+    select, button { padding: 6px 12px; border-radius: 6px; border: 1px solid #cbd5e1; background: #fff; font-size: 0.9rem; cursor: pointer; }
+    button { background: #2563eb; color: #fff; border: none; font-weight: 500; }
+    button:hover { background: #1d4ed8; }
+    input[type="range"] { cursor: pointer; width: 140px; }
+    .badge { background: #dbeafe; color: #1e40af; padding: 2px 8px; border-radius: 999px; font-weight: bold; min-width: 36px; text-align: center; }
+    .charts-grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
+    @media (min-width: 720px) { .charts-grid { grid-template-columns: 1fr 1fr; } }
+    .chart-card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; background: #fff; }
+    .chart-title { font-weight: bold; font-size: 0.95rem; margin-bottom: 4px; text-align: center; }
+    .chart-sub { font-size: 0.8rem; color: #64748b; text-align: center; margin-bottom: 10px; }
+    .canvas-wrap { position: relative; height: 260px; width: 100%; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>中央極限定理 (CLT) 互動模擬器</h2>
+    <div class="controls">
+      <div class="control-group">
+        <label for="distSelect"><strong>母體資料：</strong></label>
+        <select id="distSelect">
+          <option value="dice">公正骰子 (1~6 均勻分布)</option>
+          <option value="skewed">餐廳消費 (極度右偏分布)</option>
+        </select>
+      </div>
+
+      <div class="control-group">
+        <label for="nSlider"><strong>每組樣本數 (n)：</strong></label>
+        <input type="range" id="nSlider" min="2" max="100" value="30" />
+        <span class="badge" id="nValue">30</span>
+      </div>
+
+      <button id="rerollBtn">重新模擬 10,000 筆</button>
+    </div>
+
+    <div class="charts-grid">
+      <div class="chart-card">
+        <div class="chart-title" id="popTitle">1. 單次結果分布 (母體)</div>
+        <div class="chart-sub" id="popSub">母體平均數 μ = 3.50</div>
+        <div class="canvas-wrap"><canvas id="popChart"></canvas></div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-title" id="sampleTitle">2. 分組平均數分布 (常態鐘形)</div>
+        <div class="chart-sub" id="sampleSub">樣本平均的均值 = 3.50｜標準誤 SE = 0.31</div>
+        <div class="canvas-wrap"><canvas id="sampleChart"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const TOTAL_N = 10000;
+    let rawData = [];
+    let popChartInstance = null;
+    let sampleChartInstance = null;
+
+    const distSelect = document.getElementById('distSelect');
+    const nSlider = document.getElementById('nSlider');
+    const nValue = document.getElementById('nValue');
+    const rerollBtn = document.getElementById('rerollBtn');
+
+    function generateData(type) {
+      const arr = [];
+      for (let i = 0; i < TOTAL_N; i++) {
+        if (type === 'dice') {
+          arr.push(Math.floor(Math.random() * 6) + 1);
+        } else {
+          // 模擬右偏消費金額：底價 50 元 + 指數分布 (平均約 300 元，少數可達 3000~5000 元)
+          const u = 1 - Math.random();
+          const val = Math.min(5000, Math.round(50 - 260 * Math.log(u)));
+          arr.push(val);
+        }
+      }
+      return arr;
+    }
+
+    function buildHistogram(values, min, max, bins) {
+      const step = (max - min) / bins;
+      const counts = new Array(bins).fill(0);
+      const labels = [];
+      for (let i = 0; i < bins; i++) {
+        const start = min + i * step;
+        labels.push(step >= 10 ? Math.round(start) : start.toFixed(2));
+      }
+      for (const v of values) {
+        let idx = Math.floor((v - min) / step);
+        if (idx < 0) idx = 0;
+        if (idx >= bins) idx = bins - 1;
+        counts[idx]++;
+      }
+      return { labels, counts };
+    }
+
+    function render() {
+      const type = distSelect.value;
+      const n = parseInt(nSlider.value, 10);
+      nValue.textContent = n;
+
+      // 計算母體平均數
+      const popMean = rawData.reduce((a, b) => a + b, 0) / rawData.length;
+
+      // 計算分組平均數
+      const numGroups = Math.floor(TOTAL_N / n);
+      const sampleMeans = [];
+      for (let g = 0; g < numGroups; g++) {
+        let sum = 0;
+        for (let j = 0; j < n; j++) {
+          sum += rawData[g * n + j];
+        }
+        sampleMeans.push(sum / n);
+      }
+
+      const sampleMeanOfMeans = sampleMeans.reduce((a, b) => a + b, 0) / sampleMeans.length;
+      const variance = sampleMeans.reduce((acc, val) => acc + Math.pow(val - sampleMeanOfMeans, 2), 0) / sampleMeans.length;
+      const se = Math.sqrt(variance);
+
+      // 準備左圖 (母體) 資料
+      let popLabels, popCounts;
+      if (type === 'dice') {
+        popLabels = ['1點', '2點', '3點', '4點', '5點', '6點'];
+        popCounts = [0, 0, 0, 0, 0, 0];
+        rawData.forEach(v => popCounts[v - 1]++);
+        document.getElementById('popSub').textContent = `母體平均數 μ = ${popMean.toFixed(2)} (理論值 3.50)`;
+      } else {
+        const hist = buildHistogram(rawData, 50, 2500, 25);
+        popLabels = hist.labels.map(l => `${l}元`);
+        popCounts = hist.counts;
+        document.getElementById('popSub').textContent = `母體平均數 μ ≈ ${Math.round(popMean)} 元 (極度右偏)`;
+      }
+
+      // 準備右圖 (樣本平均) 資料
+      let sampleHist;
+      if (type === 'dice') {
+        sampleHist = buildHistogram(sampleMeans, 1.0, 6.0, 25);
+        document.getElementById('sampleTitle').textContent = `2. 每 ${n} 次算一次平均 (共 ${numGroups} 組)`;
+        document.getElementById('sampleSub').textContent = `平均值的均值 = ${sampleMeanOfMeans.toFixed(2)}｜標準誤 SE = ${se.toFixed(2)}`;
+      } else {
+        sampleHist = buildHistogram(sampleMeans, 50, 800, 25);
+        sampleHist.labels = sampleHist.labels.map(l => `${l}元`);
+        document.getElementById('sampleTitle').textContent = `2. 每 ${n} 筆消費算平均 (共 ${numGroups} 組)`;
+        document.getElementById('sampleSub').textContent = `平均值的均值 ≈ ${Math.round(sampleMeanOfMeans)} 元｜標準誤 SE ≈ ${Math.round(se)} 元`;
+      }
+
+      // 繪製左圖
+      if (popChartInstance) popChartInstance.destroy();
+      popChartInstance = new Chart(document.getElementById('popChart'), {
+        type: 'bar',
+        data: {
+          labels: popLabels,
+          datasets: [{
+            label: '出現次數',
+            data: popCounts,
+            backgroundColor: '#3b82f6',
+            borderRadius: 3
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          plugins: { legend: { display: false } },
+          scales: { x: { grid: { display: false } }, y: { beginAtZero: true } }
+        }
+      });
+
+      // 繪製右圖
+      if (sampleChartInstance) sampleChartInstance.destroy();
+      sampleChartInstance = new Chart(document.getElementById('sampleChart'), {
+        type: 'bar',
+        data: {
+          labels: sampleHist.labels,
+          datasets: [{
+            label: '組數頻率',
+            data: sampleHist.counts,
+            backgroundColor: '#10b981',
+            borderRadius: 3,
+            barPercentage: 0.95,
+            categoryPercentage: 0.95
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          plugins: { legend: { display: false } },
+          scales: { x: { grid: { display: false } }, y: { beginAtZero: true } }
+        }
+      });
+    }
+
+    function initAndRender() {
+      rawData = generateData(distSelect.value);
+      render();
+    }
+
+    distSelect.addEventListener('change', initAndRender);
+    nSlider.addEventListener('input', render);
+    rerollBtn.addEventListener('click', initAndRender);
+
+    initAndRender();
+  </script>
+</body>
+</html>
